@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>BlairIT Billjitsu</title>
+  <title>BlairIT BillJitsu</title>
   <style>
     :root { --primary: #0052CC; --success: #00C853; --bg: #f5f5f5; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); margin:0; padding:0; }
@@ -39,137 +39,273 @@
   </div>
 
   <script>
-  // ==== CONFIG (already correct) ====
-  const CLIENT_ID = "QoV0EhysIrvKh-uo5wrC2lxuJTc";
-  const REGION = "us"; // change only if you're EU or OC
-  const BASE_DOMAIN = REGION === "eu" ? "eu.ninjarmm.com" : REGION === "oc" ? "oc.ninjarmm.com" : "app.ninjarmm.com";
-  const AUTHORIZE_URL = `https://${BASE_DOMAIN}/ws/oauth/authorize`;
-  const TOKEN_URL     = `https://${BASE_DOMAIN}/ws/oauth/token`;
-  const API_BASE      = REGION === "eu" ? "https://eu-api.ninjaone.com/v2" : "https://api.ninjaone.com/v2";
-  const REDIRECT_URI  = "https://mkennedy2547.github.io/billjitsu/";
+    // ==================== CONFIG ====================
+    const CLIENT_ID = "QoV0EhysIrvKh-uo5wrC2lxuJTc";
+    const REGION = "us"; // ← change to "eu" or "oc" only if you're not in the US
+    const BASE_DOMAIN = REGION === "eu" ? "eu.ninjarmm.com" : REGION === "oc" ? "oc.ninjarmm.com" : "app.ninjarmm.com";
+    const AUTHORIZE_URL = `https://${BASE_DOMAIN}/ws/oauth/authorize`;
+    const TOKEN_URL     = `https://${BASE_DOMAIN}/ws/oauth/token`;
+    const API_BASE      = REGION === "eu" ? "https://eu-api.ninjaone.com/v2" : "https://api.ninjaone.com/v2";
+    const REDIRECT_URI  = "https://mkennedy2547.github.io/billjitsu/";
 
-  // PKCE + storage helpers (unchanged)
-  function generateCodeVerifier() { /* ... your existing function ... */ }
-  async function generateCodeChallenge(v) { /* ... your existing function ... */ }
-  const storage = { get: k => JSON.parse(localStorage.getItem(k)), set: (k,v) => localStorage.setItem(k, JSON.stringify(v)), remove: k => localStorage.removeItem(k) };
+    // ==================== PKCE HELPERS ====================
+    function generateCodeVerifier() {
+      const array = new Uint32Array(28);
+      crypto.getRandomValues(array);
+      return Array.from(array, dec => ('0' + dec.toString(36)).slice(-2)).join('');
+    }
+    async function generateCodeChallenge(verifier) {
+      const data = new TextEncoder().encode(verifier);
+      const digest = await crypto.subtle.digest('SHA-256', data);
+      return btoa(String.fromCharCode(...new Uint8Array(digest)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
 
-  const loginScreen = document.getElementById('loginScreen');
-  const ticketsScreen = document.getElementById('ticketsScreen');
-  const ticketsList = document.getElementById('ticketsList');
+    // ==================== STORAGE ====================
+    const storage = {
+      get: k => JSON.parse(localStorage.getItem(k)),
+      set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+      remove: k => localStorage.removeItem(k)
+    };
 
-  // ==== LOGIN BUTTON (already working) ====
-  document.getElementById('loginBtn').addEventListener('click', async () => {
-    const verifier = generateCodeVerifier();
-    const challenge = await generateCodeChallenge(verifier);
-    storage.set('codeVerifier', verifier);
-    const params = new URLSearchParams({
-      response_type: 'code', client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
-      scope: 'monitoring management ticketing offline_access',
-      code_challenge: challenge, code_challenge_method: 'S256',
-      state: Math.random().toString(36).substring(2)
-    });
-    location.href = `${AUTHORIZE_URL}?${params}`;
-  });
+    // ==================== ELEMENTS ====================
+    const loginScreen   = document.getElementById('loginScreen');
+    const ticketsScreen = document.getElementById('ticketsScreen');
+    const ticketsList   = document.getElementById('ticketsList');
 
-  // ==== TOKEN EXCHANGE (already working) ====
-  async function exchangeCode(code) {
-    const verifier = storage.get('codeVerifier');
-    const res = await fetch(TOKEN_URL, { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'},
-      body: new URLSearchParams({ grant_type:'authorization_code', client_id: CLIENT_ID, code, redirect_uri: REDIRECT_URI, code_verifier: verifier })
-    });
-    const data = await res.json();
-    if (data.access_token) {
-      data.expires_at = Date.now() + data.expires_in*1000;
-      storage.set('tokens', data);
-      storage.remove('codeVerifier');
-      showTickets();                 // ← THIS IS THE LINE THAT WAS MISSING
-    } else alert('Login failed: '+JSON.stringify(data));
-  }
+    // ==================== LOGIN ====================
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      storage.set('codeVerifier', verifier);
 
-  // ==== API CALL WRAPPER WITH AUTO-REFRESH ====
-  async function api(path) {
-    let tokens = storage.get('tokens');
-    if (tokens.expires_at < Date.now()) {
-      const ref = await fetch(TOKEN_URL, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body: new URLSearchParams({ grant_type:'refresh_token', client_id: CLIENT_ID, refresh_token: tokens.refresh_token })
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: 'monitoring management control offline_access',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        state: Math.random().toString(36).substring(2)
       });
-      tokens = await ref.json();
-      tokens.expires_at = Date.now() + tokens.expires_in*1000;
-      storage.set('tokens', tokens);
+
+      location.href = `${AUTHORIZE_URL}?${params}`;
+    });
+
+    // ==================== TOKEN EXCHANGE ====================
+    async function exchangeCode(code) {
+      const verifier = storage.get('codeVerifier');
+      const res = await fetch(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: CLIENT_ID,
+          code,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: verifier
+        })
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        data.expires_at = Date.now() + data.expires_in * 1000;
+        storage.set('tokens', data);
+        storage.remove('codeVerifier');
+        showTickets();
+      } else {
+        alert('Login failed: ' + JSON.stringify(data));
+      }
     }
-    const res = await fetch(API_BASE + path, { headers: { Authorization: `Bearer ${tokens.access_token}` }});
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  }
 
-  // ==== LOAD TICKETS ====
-  async function loadTickets() {
-    const tickets = await api('/ticketing/tickets?status=Open');
-    // Optional: filter to only YOUR tickets
-    const user = storage.get('userEmail') || (await api('/account/users/me')).email;
-    if (!storage.get('userEmail')) storage.set('userEmail', user);
-    return tickets.filter(t => t.assignee?.email?.toLowerCase() === user.toLowerCase())
-                  .sort((a,b) => b.id - a.id);
-  }
+    // ==================== API WRAPPER (with auto-refresh) ====================
+    async function api(path, options = {}) {
+      let tokens = storage.get('tokens');
+      if (!tokens) throw new Error("Not logged in");
 
-  // ==== RENDER TICKETS + TIMER LOGIC (your original code, just pasted back in) ====
-  function formatTime(s) { const h=Math.floor(s/3600).toString().padStart(2,'0'); const m=Math.floor((s%3600)/60).toString().padStart(2,'0'); const sec=(s%60).toString().padStart(2,'0'); return `${h}:${m}:${sec}`; }
+      if (tokens.expires_at < Date.now()) {
+        const ref = await fetch(TOKEN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: CLIENT_ID,
+            refresh_token: tokens.refresh_token
+          })
+        });
+        tokens = await ref.json();
+        tokens.expires_at = Date.now() + tokens.expires_in * 1000;
+        storage.set('tokens', tokens);
+      }
 
-  function startTimer(id) { /* your existing startTimer */ }
-  function stopTimer()    { /* your existing stopTimer */ }
-  function updateDisplay(){ /* your existing updateDisplay */ }
-  async function logTime(id, mins){ /* your existing logTime */ }
+      const res = await fetch(API_BASE + path, {
+        method: options.method || 'GET',
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          'Content-Type': 'application/json',
+          ...(options.headers || {})
+        },
+        body: options.body
+      });
 
-  function renderTickets(tickets) {
-    const timers = storage.get('timers') || {};
-    ticketsList.innerHTML = tickets.map(t => {
-      const data = timers[t.id] || {total:0, start:null};
-      const running = timers.active == t.id;
-      const secs = data.total + (running ? Math.floor((Date.now()-data.start)/1000) : 0);
-      return `<div class="card">
-        <div class="ticket-title">#${t.id} – ${t.title}</div>
-        <div style="color:#666;font-size:0.9em;margin-bottom:8px;">
-          ${t.customer?.name || 'No customer'} • ${new Date(t.created).toLocaleDateString()}
-        </div>
-        <div class="timer" data-ticket-id="${t.id}">${formatTime(secs)}</div>
-        <div>
-          ${running ? `<button class="btn btn-small" onclick="stopTimer();updateDisplay()">Stop</button>`
-                    : `<button class="btn btn-primary btn-small" onclick ‘startTimer(${t.id});updateDisplay(${t.id})">Start Timer</button>`}
-          <button class="btn btn-success btn-small" style="margin-left:8px;" 
-                  onclick="if(confirm('Log current time?')) {const m=Math.floor(${secs}/60)||1; logTime(${t.id},m)}">Log Time</button>
-        </div>
-      </div>`;
-    }).join('');
-    if (timers.active) setInterval(() => updateDisplay(timers.active), 1000);
-  }
-
-  async function showTickets() {
-    loginScreen.classList.add('hidden');
-    ticketsScreen.classList.remove('hidden');
-    ticketsList.innerHTML = '<p>Loading tickets…</p>';
-    try {
-      const tickets = await loadTickets();
-      renderTickets(tickets || []);
-    } catch (e) {
-      ticketsList.innerHTML = '<p style="color:red">Error loading tickets: '+e.message+'</p>';
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`API ${res.status}: ${err}`);
+      }
+      return res.status === 204 ? null : res.json();
     }
-  }
 
-  // ==== ON LOAD ====
-  const params = new URLSearchParams(location.search);
-  if (params.get('code')) {
-    history.replaceState(null,'',location.pathname);
-    exchangeCode(params.get('code'));
-  } else if (storage.get('tokens')) {
-    showTickets();
-  }
+    // ==================== LOAD TICKETS ====================
+    async function loadTickets() {
+      const tickets = await api('/ticketing/tickets?status=Open');
+      const userEmail = storage.get('userEmail') || (await api('/account/users/me')).email;
+      if (!storage.get('userEmail')) storage.set('userEmail', userEmail);
 
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    ['tokens','timers','userEmail'].forEach(k=>storage.remove(k));
-    location.reload();
-  });
+      return tickets
+        .filter(t => t.assignee?.email?.toLowerCase() === userEmail.toLowerCase())
+        .sort((a, b) => b.id - a.id);
+    }
 
-  window.startTimer= startTimer; window.stopTimer=stopTimer; window.updateDisplay=updateDisplay; window.logTime=logTime;
-</script>
+    // ==================== TIMER FUNCTIONS ====================
+    function formatTime(seconds) {
+      const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+      const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+      const s = (seconds % 60).toString().padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function startTimer(ticketId) {
+      const timers = storage.get('timers') || {};
+      if (timers.active && timers.active !== ticketId) stopTimer();
+      timers[ticketId] = timers[ticketId] || { total: 0, start: null };
+      timers[ticketId].start = Date.now();
+      timers.active = ticketId;
+      storage.set('timers', timers);
+      startInterval(ticketId);
+    }
+
+    function stopTimer() {
+      const timers = storage.get('timers') || {};
+      if (!timers.active) return;
+      const elapsed = Math.floor((Date.now() - timers[timers.active].start) / 1000);
+      timers[timers.active].total += elapsed;
+      timers[timers.active].start = null;
+      delete timers.active;
+      storage.set('timers', timers);
+      clearInterval(window.timerInterval);
+    }
+
+    function startInterval(activeId) {
+      clearInterval(window.timerInterval);
+      window.timerInterval = setInterval(() => updateDisplay(activeId), 1000);
+    }
+
+    function updateDisplay(activeId = null) {
+      document.querySelectorAll('.timer').forEach(el => {
+        const id = parseInt(el.dataset.ticketId);
+        const timers = storage.get('timers') || {};
+        const data = timers[id] || { total: 0, start: null };
+        let secs = data.total;
+        if (data.start && id === (activeId || timers.active)) {
+          secs += Math.floor((Date.now() - data.start) / 1000);
+        }
+        el.textContent = formatTime(secs);
+      });
+    }
+
+    // ==================== LOG TIME → "Time Utilized" (adds to existing) ====================
+    async function logTime(ticketId, seconds) {
+      const minutesToAdd = Math.max(1, Math.floor(seconds / 60));
+      if (minutesToAdd === 0) return alert("No time to log!");
+
+      try {
+        const ticket = await api(`/ticketing/tickets/${ticketId}`);
+        const current = Number(ticket.customFields?.["Time Utilized"] || 0);
+        const newTotal = current + minutesToAdd;
+
+        await api(`/ticketing/tickets/${ticketId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customFields: { "Time Utilized": newTotal }
+          })
+        });
+
+        alert(`Added ${minutesToAdd} minute${minutesToAdd > 1 ? 's' : ''} → Total: ${newTotal}`);
+
+        // Reset local timer
+        const timers = storage.get('timers') || {};
+        if (timers[ticketId]) timers[ticketId].total = 0;
+        if (timers.active === ticketId) stopTimer();
+        storage.set('timers', timers);
+        updateDisplay();
+      } catch (e) {
+        alert("Failed to update Time Utilized: " + e.message);
+        console.error(e);
+      }
+    }
+
+    // ==================== RENDER TICKETS ====================
+    function renderTickets(tickets) {
+      const timers = storage.get('timers') || {};
+      ticketsList.innerHTML = tickets.map(t => {
+        const data = timers[t.id] || { total: 0, start: null };
+        const running = timers.active == t.id;
+        const secs = data.total + (running ? Math.floor((Date.now() - data.start) / 1000) : 0);
+
+        return `
+          <div class="card">
+            <div class="ticket-title">#${t.id} – ${t.title}</div>
+            <div style="color:#666;font-size:0.9em;margin-bottom:8px;">
+              ${t.customer?.name || 'No customer'} • ${new Date(t.created).toLocaleDateString()}
+            </div>
+            <div class="timer" data-ticket-id="${t.id}">${formatTime(secs)}</div>
+            <div>
+              ${running
+                ? `<button class="btn btn-small" onclick="stopTimer();updateDisplay()">Stop</button>`
+                : `<button class="btn btn-primary btn-small" onclick="startTimer(${t.id});updateDisplay(${t.id})">Start Timer</button>`
+              }
+              <button class="btn btn-success btn-small" style="margin-left:8px;"
+                onclick="if(confirm('Log time to \"Time Utilized\"?')) logTime(${t.id}, ${secs})">
+                Log Time
+              </button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    // ==================== SHOW TICKETS ====================
+    async function showTickets() {
+      loginScreen.classList.add('hidden');
+      ticketsScreen.classList.remove('hidden');
+      ticketsList.innerHTML = '<p>Loading your tickets…</p>';
+      try {
+        const tickets = await loadTickets();
+        renderTickets(tickets);
+      } catch (e) {
+        ticketsList.innerHTML = `<p style="color:red">Error: ${e.message}</p>`;
+      }
+    }
+
+    // ==================== ON LOAD ====================
+    const urlParams = new URLSearchParams(location.search);
+    const code = urlParams.get('code');
+    if (code) {
+      history.replaceState(null, '', location.pathname);
+      exchangeCode(code);
+    } else if (storage.get('tokens')) {
+      showTickets();
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      ['tokens', 'timers', 'userEmail'].forEach(k => storage.remove(k));
+      location.reload();
+    });
+
+    // Global functions for onclick
+    window.startTimer = startTimer;
+    window.stopTimer = stopTimer;
+    window.updateDisplay = updateDisplay;
+    window.logTime = logTime;
+  </script>
 </body>
 </html>
